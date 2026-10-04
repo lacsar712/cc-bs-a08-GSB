@@ -42,6 +42,73 @@ h1 {
   margin-bottom: 1rem;
 }
 
+.topright {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.userline {
+  font-size: 0.85rem;
+  color: #555;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hint {
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: #777;
+  margin-left: 0.5rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+button.tab.on {
+  background: #1565c0;
+}
+
+.preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: #f5f8fb;
+  border: 1px solid #d7e3ee;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+p.preview {
+  margin-bottom: 0;
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.82rem;
+  background: #eef2f6;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+td code {
+  white-space: normal;
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
