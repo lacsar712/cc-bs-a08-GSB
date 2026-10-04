@@ -129,3 +129,71 @@ th {
   background: #fff8e1;
   color: #f57f17;
 }
+
+.barright {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.barright .who {
+  font-size: 0.9rem;
+  color: #333;
+  white-space: nowrap;
+}
+
+button.active {
+  background: #0d47a1;
+  outline: 2px solid #90caf9;
+}
+
+.paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+.path {
+  flex: 1 1 300px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: #fafafa;
+}
+
+.path h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.92rem;
+}
+
+.preview {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  color: #1565c0;
+}
+
+.hint {
+  font-size: 0.82rem;
+  color: #777;
+  font-weight: normal;
+  margin-left: 0.5rem;
+}
+
+.formula {
+  margin: 0;
+  align-self: center;
+  font-size: 0.9rem;
+  color: #444;
+  background: #eceff1;
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+}
+
+input:disabled {
+  background: #f0f0f0;
+  color: #666;
+  cursor: not-allowed;
+}

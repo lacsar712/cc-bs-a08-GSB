@@ -6,7 +6,15 @@ from passlib.context import CryptContext
 from sanic import Sanic
 from sanic.response import json as sanic_json
 
-from db import create_pool, ensure_schema, seed_if_empty
+from db import (
+    READING_COLUMNS,
+    create_pool,
+    ensure_schema,
+    serialize_log,
+    serialize_reading,
+    seed_if_empty,
+)
+from rules import ConversionError, resolve_submission
 
 SECRET = os.environ.get("JWT_SECRET", "bridge-strain-dev-secret")
 pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -40,16 +48,13 @@ def _decode_user(token: str | None) -> dict | None:
 
 
 def _require_user(request) -> dict:
-    user = _decode_user(_auth_header(request))
-    if not user:
-        return None
-    return user
+    return _decode_user(_auth_header(request))
 
 
-def _iso(dt) -> str | None:
-    if dt is None:
+def _iso(value) -> str | None:
+    if value is None:
         return None
-    return dt.isoformat()
+    return value.isoformat()
 
 
 @app.before_server_start
@@ -91,6 +96,17 @@ async def login(request):
     )
 
 
+def _reading_payload(row, message: str | None = None) -> dict:
+    payload = {
+        **serialize_reading(row),
+        "created_at": _iso(row["created_at"]),
+        "processed_at": _iso(row["processed_at"]),
+    }
+    if message:
+        payload["message"] = message
+    return payload
+
+
 @app.get("/api/readings")
 async def list_readings(request):
     if not _require_user(request):
@@ -99,30 +115,14 @@ async def list_readings(request):
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """
-                SELECT id, span_code, microstrain, verdict, reason, status,
-                       created_by, created_at, processed_at
+                f"""
+                SELECT {READING_COLUMNS}
                 FROM strain_readings
                 ORDER BY id DESC
                 """
             )
             rows = await cur.fetchall()
-    out = []
-    for r in rows:
-        out.append(
-            {
-                "id": r["id"],
-                "span_code": r["span_code"],
-                "microstrain": r["microstrain"],
-                "verdict": r["verdict"],
-                "reason": r["reason"],
-                "status": r["status"],
-                "created_by": r["created_by"],
-                "created_at": _iso(r["created_at"]),
-                "processed_at": _iso(r["processed_at"]),
-            }
-        )
-    return sanic_json(out)
+    return sanic_json([_reading_payload(r) for r in rows])
 
 
 @app.post("/api/readings")
@@ -132,42 +132,88 @@ async def create_reading(request):
         return sanic_json({"detail": "未登录"}, status=401)
     if user["role"] != "writer":
         return sanic_json({"detail": "仅测量员可提交应变读数"}, status=403)
-    body = request.json or {}
-    span_code = str(body.get("span_code", "")).strip()
-    if not span_code:
-        return sanic_json({"detail": "跨段编号不能为空"}, status=400)
-    try:
-        microstrain = float(body.get("microstrain"))
-    except (TypeError, ValueError):
-        return sanic_json({"detail": "微应变必须是数字"}, status=400)
 
+    # 双路径（直填微应变 / 原始电压换算）共用同一解析入口，
+    # 非法灵敏度、换算出界等失败在此统一退回，措辞与前端表单逐字一致。
+    try:
+        data = resolve_submission(request.json or {})
+    except ConversionError as exc:
+        return sanic_json({"detail": str(exc)}, status=400)
+
+    pool = request.app.ctx.pool
+    async with pool.connection() as conn:
+        try:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        INSERT INTO strain_readings
+                            (span_code, microstrain, raw_voltage, sensitivity,
+                             rated_voltage, status, created_by, created_at)
+                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, now())
+                        RETURNING """ + READING_COLUMNS,
+                        (
+                            data["span_code"],
+                            data["microstrain"],
+                            data["raw_voltage"],
+                            data["sensitivity"],
+                            data["rated_voltage"],
+                            user["username"],
+                        ),
+                    )
+                    row = await cur.fetchone()
+                    # 入队与换算流水同一事务：要么同时可见，要么同时回滚。
+                    await cur.execute(
+                        """
+                        INSERT INTO conversion_logs
+                            (reading_id, span_code, path, raw_voltage,
+                             sensitivity, rated_voltage, microstrain,
+                             created_by, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                        """,
+                        (
+                            row["id"],
+                            row["span_code"],
+                            "voltage" if data["converted_from_voltage"] else "direct",
+                            row["raw_voltage"],
+                            row["sensitivity"],
+                            row["rated_voltage"],
+                            row["microstrain"],
+                            user["username"],
+                        ),
+                    )
+        except Exception:
+            await conn.rollback()
+            raise
+
+    return sanic_json(
+        _reading_payload(row, "已入队，后台工人将认领并判定"),
+        status=201,
+    )
+
+
+@app.get("/api/conversion-logs")
+async def list_conversion_logs(request):
+    # 复核员与测量员均可查看换算流水；接口只读，参数不可在此修改。
+    if not _require_user(request):
+        return sanic_json({"detail": "未登录"}, status=401)
     pool = request.app.ctx.pool
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                INSERT INTO strain_readings (span_code, microstrain, status, created_by, created_at)
-                VALUES (%s, %s, 'pending', %s, now())
-                RETURNING id, span_code, microstrain, verdict, reason, status,
-                          created_by, created_at, processed_at
-                """,
-                (span_code, microstrain, user["username"]),
+                SELECT id, reading_id, span_code, path, raw_voltage,
+                       sensitivity, rated_voltage, microstrain,
+                       created_by, created_at
+                FROM conversion_logs
+                ORDER BY id DESC
+                LIMIT 200
+                """
             )
-            row = await cur.fetchone()
-        await conn.commit()
-
-    return sanic_json(
-        {
-            "id": row["id"],
-            "span_code": row["span_code"],
-            "microstrain": row["microstrain"],
-            "verdict": row["verdict"],
-            "reason": row["reason"],
-            "status": row["status"],
-            "created_by": row["created_by"],
-            "created_at": _iso(row["created_at"]),
-            "processed_at": None,
-            "message": "已入队，后台工人将认领并判定",
-        },
-        status=201,
-    )
+            rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        item = serialize_log(r)
+        item["created_at"] = _iso(r["created_at"])
+        out.append(item)
+    return sanic_json(out)
